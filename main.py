@@ -1,6 +1,7 @@
 import os
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from pyrogram.enums import ChatAction  # ✅ Fix: Import ChatAction enum
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
@@ -73,7 +74,7 @@ async def send_video_with_thumb(client, message: Message):
     if not path or not os.path.exists(path):
         await message.reply_text("❌ No thumbnail found. Please send a photo first.")
         return
-    await message.reply_chat_action("upload_video")
+    await message.reply_chat_action(ChatAction.UPLOAD_VIDEO)  # ✅ Fixed enum usage
     await message.reply_video(
         video=message.video.file_id,
         thumb=path,
