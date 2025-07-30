@@ -1,5 +1,5 @@
-pyrogram
-tgcrypto 
-pymongo 
-python-dotenv 
+pyrogram==2.0.106
+tgcrypto
+pymongo
+python-dotenv
 flask
