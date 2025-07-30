@@ -1,12 +1,11 @@
 import os
-import asyncio
+import socket
+import threading
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ChatAction
 from pymongo import MongoClient
 from dotenv import load_dotenv
-from flask import Flask
-from threading import Thread
 
 # Load environment variables
 load_dotenv()
@@ -23,19 +22,18 @@ mongo = MongoClient(MONGO_URL)
 db = mongo.thumbbot
 thumbs_col = db.thumbs
 
-# Health check server (for Koyeb)
-app = Flask(__name__)
+# ✅ TCP Health check server for Koyeb
+def start_tcp_health_check():
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind(("0.0.0.0", 8080))
+    server_socket.listen(1)
+    while True:
+        conn, _ = server_socket.accept()
+        conn.close()
 
-@app.route("/")
-def index():
-    return "Bot is alive!", 200
+threading.Thread(target=start_tcp_health_check, daemon=True).start()
 
-def run_health_server():
-    app.run(host="0.0.0.0", port=8080)
-
-Thread(target=run_health_server).start()
-
-# Thumbnail DB ops
+# DB operations
 def get_thumb(user_id):
     data = thumbs_col.find_one({"user_id": user_id})
     return data["thumb_path"] if data else None
@@ -87,8 +85,14 @@ async def save_thumb_cmd(client, message: Message):
     save_thumb(user_id, path)
     await message.reply_text("✅ Thumbnail saved!")
 
-@bot.on_message(filters.video | filters.document.video)
+def is_video_doc(msg: Message):
+    return msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video/")
+
+@bot.on_message(filters.video | filters.document)
 async def send_video_with_thumb(client, message: Message):
+    if not message.video and not is_video_doc(message):
+        return  # Ignore non-video documents
+
     user_id = message.from_user.id
     path = get_thumb(user_id)
     if not path or not os.path.exists(path):
@@ -97,8 +101,9 @@ async def send_video_with_thumb(client, message: Message):
 
     await message.reply_chat_action(ChatAction.UPLOAD_VIDEO)
 
+    file_id = message.video.file_id if message.video else message.document.file_id
     await message.reply_video(
-        video=message.video.file_id if message.video else message.document.file_id,
+        video=file_id,
         thumb=path,
         caption="🎬 Video with your custom thumbnail"
     )
