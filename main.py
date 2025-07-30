@@ -6,23 +6,24 @@ from pyrogram.types import Message
 from pyrogram.enums import ChatAction
 from pymongo import MongoClient
 from dotenv import load_dotenv
+from PIL import Image
 
-# Load environment variables
+# Load .env variables
 load_dotenv()
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 
-# Pyrogram client
+# Pyrogram bot client
 bot = Client("thumb_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# MongoDB setup
+# MongoDB
 mongo = MongoClient(MONGO_URL)
 db = mongo.thumbbot
 thumbs_col = db.thumbs
 
-# ✅ TCP Health check server for Koyeb
+# TCP Health check (Koyeb)
 def start_tcp_health_check():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind(("0.0.0.0", 8080))
@@ -33,7 +34,10 @@ def start_tcp_health_check():
 
 threading.Thread(target=start_tcp_health_check, daemon=True).start()
 
-# DB operations
+# Ensure folder
+os.makedirs("thumbs", exist_ok=True)
+
+# Thumbnail functions
 def get_thumb(user_id):
     data = thumbs_col.find_one({"user_id": user_id})
     return data["thumb_path"] if data else None
@@ -44,18 +48,24 @@ def save_thumb(user_id, path):
 def delete_thumb(user_id):
     thumbs_col.delete_one({"user_id": user_id})
 
-# Bot commands
+def resize_thumb(path):
+    try:
+        im = Image.open(path).convert("RGB")
+        im.thumbnail((320, 180))
+        im.save(path, "JPEG")
+    except Exception as e:
+        print(f"Thumbnail resize failed: {e}")
+
+# Commands
 @bot.on_message(filters.command("start"))
 async def start(client, message: Message):
     await message.reply_text(
         "**👋 Welcome!**\n\n"
-        "This bot lets you add custom thumbnails to Telegram videos or documents.\n\n"
-        "**📌 How to use:**\n"
-        "1. Send a photo – This becomes your thumbnail\n"
-        "2. Send a video or document – The bot will send it back with the thumbnail\n\n"
-        "**🔧 Commands:**\n"
-        "`/show_thumb` – View current thumbnail\n"
-        "`/del_thumb` – Delete saved thumbnail"
+        "Send a photo to set a thumbnail.\n"
+        "Then send a video or document and I’ll send it back with your thumbnail.\n\n"
+        "**Commands:**\n"
+        "`/show_thumb` – View thumbnail\n"
+        "`/del_thumb` – Delete thumbnail"
     )
 
 @bot.on_message(filters.command("show_thumb"))
@@ -65,10 +75,10 @@ async def show_thumb(client, message: Message):
     if path and os.path.exists(path):
         await message.reply_photo(path, caption="📸 Current Thumbnail")
     else:
-        await message.reply_text("❌ No thumbnail set. Send a photo to set one.")
+        await message.reply_text("❌ No thumbnail found.")
 
 @bot.on_message(filters.command("del_thumb"))
-async def delete_thumb_cmd(client, message: Message):
+async def del_thumb(client, message: Message):
     user_id = message.from_user.id
     path = get_thumb(user_id)
     if path and os.path.exists(path):
@@ -80,8 +90,8 @@ async def delete_thumb_cmd(client, message: Message):
 async def save_thumb_cmd(client, message: Message):
     user_id = message.from_user.id
     path = f"thumbs/{user_id}.jpg"
-    os.makedirs("thumbs", exist_ok=True)
     await message.download(file_name=path)
+    resize_thumb(path)
     save_thumb(user_id, path)
     await message.reply_text("✅ Thumbnail saved!")
 
@@ -89,23 +99,31 @@ def is_video_doc(msg: Message):
     return msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video/")
 
 @bot.on_message(filters.video | filters.document)
-async def send_video_with_thumb(client, message: Message):
+async def process_video(client, message: Message):
     if not message.video and not is_video_doc(message):
-        return  # Ignore non-video documents
+        return  # Skip non-video docs
 
     user_id = message.from_user.id
-    path = get_thumb(user_id)
-    if not path or not os.path.exists(path):
-        await message.reply_text("❌ No thumbnail found. Please send a photo first.")
+    thumb_path = get_thumb(user_id)
+
+    if not thumb_path or not os.path.exists(thumb_path):
+        await message.reply_text("❌ Please send a photo first to use as a thumbnail.")
         return
 
     await message.reply_chat_action(ChatAction.UPLOAD_VIDEO)
 
-    file_id = message.video.file_id if message.video else message.document.file_id
+    # Download video/document
+    video_path = await message.download()
+
+    # Send with custom thumbnail
     await message.reply_video(
-        video=file_id,
-        thumb=path,
-        caption="🎬 Video with your custom thumbnail"
+        video=video_path,
+        thumb=thumb_path,
+        caption="🎬 Video with your custom thumbnail",
+        supports_streaming=True
     )
 
+    os.remove(video_path)
+
+# Run bot
 bot.run()
