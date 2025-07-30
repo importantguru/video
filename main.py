@@ -1,22 +1,41 @@
 import os
+import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from pyrogram.enums import ChatAction  # ✅ Fix: Import ChatAction enum
+from pyrogram.enums import ChatAction
 from pymongo import MongoClient
 from dotenv import load_dotenv
+from flask import Flask
+from threading import Thread
 
+# Load environment variables
 load_dotenv()
-
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 
+# Pyrogram client
 bot = Client("thumb_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# MongoDB setup
 mongo = MongoClient(MONGO_URL)
 db = mongo.thumbbot
 thumbs_col = db.thumbs
 
+# Health check server (for Koyeb)
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "Bot is alive!", 200
+
+def run_health_server():
+    app.run(host="0.0.0.0", port=8080)
+
+Thread(target=run_health_server).start()
+
+# Thumbnail DB ops
 def get_thumb(user_id):
     data = thumbs_col.find_one({"user_id": user_id})
     return data["thumb_path"] if data else None
@@ -27,14 +46,15 @@ def save_thumb(user_id, path):
 def delete_thumb(user_id):
     thumbs_col.delete_one({"user_id": user_id})
 
+# Bot commands
 @bot.on_message(filters.command("start"))
 async def start(client, message: Message):
     await message.reply_text(
         "**👋 Welcome!**\n\n"
-        "This bot lets you add custom thumbnails to Telegram videos.\n\n"
+        "This bot lets you add custom thumbnails to Telegram videos or documents.\n\n"
         "**📌 How to use:**\n"
         "1. Send a photo – This becomes your thumbnail\n"
-        "2. Send a video – The bot will send it back with the thumbnail\n\n"
+        "2. Send a video or document – The bot will send it back with the thumbnail\n\n"
         "**🔧 Commands:**\n"
         "`/show_thumb` – View current thumbnail\n"
         "`/del_thumb` – Delete saved thumbnail"
@@ -67,16 +87,18 @@ async def save_thumb_cmd(client, message: Message):
     save_thumb(user_id, path)
     await message.reply_text("✅ Thumbnail saved!")
 
-@bot.on_message(filters.video)
+@bot.on_message(filters.video | filters.document.video)
 async def send_video_with_thumb(client, message: Message):
     user_id = message.from_user.id
     path = get_thumb(user_id)
     if not path or not os.path.exists(path):
         await message.reply_text("❌ No thumbnail found. Please send a photo first.")
         return
-    await message.reply_chat_action(ChatAction.UPLOAD_VIDEO)  # ✅ Fixed enum usage
+
+    await message.reply_chat_action(ChatAction.UPLOAD_VIDEO)
+
     await message.reply_video(
-        video=message.video.file_id,
+        video=message.video.file_id if message.video else message.document.file_id,
         thumb=path,
         caption="🎬 Video with your custom thumbnail"
     )
